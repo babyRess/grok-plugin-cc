@@ -1,6 +1,6 @@
 # Grok plugin for Claude Code
 
-**v0.1.4** — early preview. Use [Grok Build](https://grok.x.ai/) from inside Claude Code for code review and task delegation.
+**v0.1.5** — early preview. Use [Grok Build](https://grok.x.ai/) from inside Claude Code for code review and task delegation.
 
 Architecture (inspired by [openai/codex-plugin-cc](https://github.com/openai/codex-plugin-cc)): slash commands + a thin rescue subagent call a local **companion** CLI, which runs your installed `grok` binary (`grok -p`). Optional Rust companion for lower latency.
 
