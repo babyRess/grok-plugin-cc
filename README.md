@@ -27,84 +27,48 @@ node plugins/grok/scripts/grok-companion.mjs setup
 
 ---
 
-## Install
+## Install (pick one)
 
-### Fast path (no Rust / no compile)
+### Option A — simplest (2 steps, no Rust, no clone)
 
-Prebuilt `grok-companion` binaries ship on [GitHub Releases](https://github.com/babyRess/grok-plugin-cc/releases) for:
-
-- macOS Apple Silicon (`aarch64-apple-darwin`)
-- macOS Intel (`x86_64-apple-darwin`)
-- Linux x64 / arm64
-
-**1. Install the Claude plugin**
+Requires: Claude Code + `grok` logged in + Node (already on most machines).
 
 ```text
 /plugin marketplace add babyRess/grok-plugin-cc
 /plugin install grok@xai-grok
 /reload-plugins
+/grok:setup
 ```
 
-**2. Download the native companion (recommended)**
+Done. Uses the **Node companion** automatically. No binary download.
 
-From a clone of this repo:
+### Option B — add native speed (one extra line)
+
+Still no Rust / no `cargo`. Downloads a prebuilt binary to `~/.grok/bin/`:
 
 ```bash
-git clone https://github.com/babyRess/grok-plugin-cc.git
-cd grok-plugin-cc
 curl -fsSL https://raw.githubusercontent.com/babyRess/grok-plugin-cc/master/scripts/install-companion.sh | bash
-# or: npm run install:companion
 ```
 
-Or one-liner into an already-installed plugin directory (after Claude install, set the path Claude shows for the plugin):
+Then reload Claude plugins (or open a new session). The plugin finds `~/.grok/bin/grok-companion` automatically.
 
-```bash
-GROK_COMPANION_DIR="/path/to/installed/plugin/bin" \
-  bash -c 'curl -fsSL https://raw.githubusercontent.com/babyRess/grok-plugin-cc/master/scripts/install-companion.sh | bash -s -- --dir "$GROK_COMPANION_DIR" --force'
-```
-
-**3. Verify**
-
-```text
-/grok:setup
-```
-
-If the binary is missing, the plugin still works via the **Node fallback** (`grok-companion.mjs`) — only Node + `grok` on PATH are required.
-
-### Local path (development)
+### Option C — developers (build from source)
 
 ```bash
 git clone https://github.com/babyRess/grok-plugin-cc.git
 cd grok-plugin-cc
-# either prebuilt:
-npm run install:companion
-# or compile yourself:
-npm run install:rust-bin
+npm run install:rust-bin   # needs Rust
 ```
 
-```text
-/plugin marketplace add /absolute/path/to/grok-plugin-cc
-/plugin install grok@xai-grok
-/reload-plugins
-/grok:setup
-```
+### Requirements
 
-### Build from source (optional)
-
-```bash
-# requires rustc/cargo
-npm run install:rust-bin
-# → plugins/grok/bin/grok-companion (gitignored)
-```
-
-Slash commands call `resolve-companion.mjs`, which **prefers the Rust binary** when present and falls back to Node.
-
-### Grok Build as host (optional)
-
-```bash
-grok plugin install https://github.com/babyRess/grok-plugin-cc.git --trust
-# then install companion into that plugin's bin/
-```
+| | Option A | Option B | Option C |
+|--|----------|----------|----------|
+| Claude Code | yes | yes | yes |
+| `grok` CLI + auth | yes | yes | yes |
+| Node.js | yes | yes | yes |
+| Prebuilt download | — | yes | — |
+| Rust/cargo | — | — | yes |
 
 ---
 
