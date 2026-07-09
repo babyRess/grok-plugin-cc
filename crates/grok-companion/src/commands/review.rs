@@ -11,7 +11,7 @@ use crate::grok::{
     build_adversarial_prompt, build_review_prompt, ensure_grok_ready, normalize_effort,
     run_grok_review,
 };
-use crate::jobutil::{finish_job, finish_job_with_session, mark_running, new_job};
+use crate::jobutil::{fail_job, finish_job, finish_job_with_session, mark_running, new_job};
 use crate::render::{first_meaningful_line, json_pretty, render_review_result, shorten};
 use crate::state::upsert_job;
 use crate::worker::{
@@ -104,16 +104,19 @@ pub fn run(args: ReviewArgs) -> Result<i32> {
             WorkerRequest::Review { request: req }
         };
         write_worker_request(&workspace, &job.id, &payload)?;
-        let pid = spawn_detached_worker(&args.cwd, &job.id)?;
+        let (pid, log_path) = spawn_detached_worker(&args.cwd, &job.id)?;
         job.pid = Some(pid);
         job.status = Some("queued".into());
         job.phase = Some("queued".into());
+        job.log_file = Some(log_path.display().to_string());
+        job.progress_message = Some("Queued background worker…".into());
         upsert_job(&workspace, job.clone())?;
         let message = format!(
-            "{} started in the background as {}. Check status {} for progress.\n",
+            "{} started in the background as {}. Check status {} for progress.\nLog: {}\n",
             job.title.as_deref().unwrap_or("Review"),
             job.id,
-            job.id
+            job.id,
+            log_path.display()
         );
         if args.json {
             println!(
@@ -141,11 +144,18 @@ pub fn execute_review(
 ) -> Result<i32> {
     mark_running(workspace, job)?;
 
-    let target = resolve_review_target(
+    let target = match resolve_review_target(
         &args.cwd,
         args.base.as_deref(),
         args.scope.as_deref(),
-    )?;
+    ) {
+        Ok(t) => t,
+        Err(e) => {
+            let summary = format!("Review target resolution failed: {e}");
+            let _ = fail_job(workspace, job, 1, &summary);
+            return Err(e);
+        }
+    };
     let review_name = if args.adversarial {
         "Adversarial Review"
     } else {
@@ -179,7 +189,14 @@ pub fn execute_review(
         return Ok(0);
     }
 
-    let context = collect_review_context(&args.cwd, &target)?;
+    let context = match collect_review_context(&args.cwd, &target) {
+        Ok(c) => c,
+        Err(e) => {
+            let summary = format!("Review context collection failed: {e}");
+            let _ = fail_job(workspace, job, 1, &summary);
+            return Err(e);
+        }
+    };
     let mut prompt = if args.adversarial {
         build_adversarial_prompt(&context, &focus)
     } else {
@@ -200,12 +217,19 @@ pub fn execute_review(
     job.progress_message = Some("Running Grok review…".into());
     upsert_job(workspace, job.clone())?;
 
-    let result = run_grok_review(
+    let result = match run_grok_review(
         &context.repo_root,
         &prompt,
         args.model.as_deref(),
         effort,
-    )?;
+    ) {
+        Ok(r) => r,
+        Err(e) => {
+            let summary = format!("Grok review failed before completion: {e}");
+            let _ = fail_job(workspace, job, 1, &summary);
+            return Err(e);
+        }
+    };
 
     let body = if result.stdout.trim().is_empty() {
         result.stderr.trim()

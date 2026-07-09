@@ -53,6 +53,23 @@ export function binaryAvailable(command, versionArgs = ["--version"], options = 
 }
 
 /**
+ * Return true if `pid` is currently alive.
+ * @param {number} pid
+ */
+export function isProcessAlive(pid) {
+  if (!Number.isFinite(pid) || pid <= 0) {
+    return false;
+  }
+  try {
+    // signal 0: existence check, no delivery
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * @param {number} pid
  * @param {NodeJS.Signals | number} [signal]
  */

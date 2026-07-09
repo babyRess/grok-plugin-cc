@@ -3,6 +3,7 @@
 use std::path::Path;
 
 use crate::error::Result;
+use crate::process::is_process_alive;
 use crate::state::{generate_job_id, now_iso, upsert_job, write_job_result, Job};
 use serde_json::Value;
 
@@ -119,6 +120,70 @@ pub fn is_active(status: Option<&str>) -> bool {
     matches!(status, Some("queued") | Some("running"))
 }
 
+/// Mark a job failed after it was already `running`/`queued` (error path / orphan).
+pub fn fail_job(workspace: &Path, job: &mut Job, exit_status: i32, summary: &str) -> Result<()> {
+    finish_job_with_session(
+        workspace,
+        job,
+        exit_status,
+        serde_json::json!({
+            "status": exit_status,
+            "error": summary,
+            "failedWithoutResult": true
+        }),
+        &format!("# Job {} failed\n\n{summary}\n", job.id),
+        summary,
+        job.grok_session_id.clone(),
+    )
+}
+
+/// If a job claims to be active but its recorded PID is dead, mark it failed.
+///
+/// This repairs the common failure mode where the worker/Grok process is killed
+/// (SIGKILL, parent teardown, CLI abort) before `finish_job` can run, leaving a
+/// permanent `status=running` marker with null result/log.
+///
+/// Returns `true` when the job record was updated.
+pub fn reconcile_stale_job(workspace: &Path, job: &mut Job) -> Result<bool> {
+    if !is_active(job.status.as_deref()) {
+        return Ok(false);
+    }
+    let Some(pid) = job.pid else {
+        return Ok(false);
+    };
+    if is_process_alive(pid) {
+        return Ok(false);
+    }
+
+    let mut summary = format!(
+        "Worker process PID {pid} is no longer running (died without writing a result)."
+    );
+    if let Some(log) = &job.log_file {
+        summary.push_str(&format!(" Log: {log}"));
+    } else {
+        summary.push_str(
+            " No worker log was captured (older companion builds discarded worker stdio).",
+        );
+    }
+    summary.push_str(" Re-run the task, or resume the Grok session if one was created.");
+
+    fail_job(workspace, job, 1, &summary)?;
+    Ok(true)
+}
+
+/// Reconcile every active job in the workspace and return the refreshed list.
+pub fn reconcile_and_list_jobs(workspace: &Path) -> Result<Vec<Job>> {
+    let jobs = list_jobs_raw(workspace);
+    for mut job in jobs {
+        let _ = reconcile_stale_job(workspace, &mut job);
+    }
+    Ok(sort_jobs_newest(crate::state::list_jobs(workspace)))
+}
+
+fn list_jobs_raw(workspace: &Path) -> Vec<Job> {
+    crate::state::list_jobs(workspace)
+}
+
 pub fn sort_jobs_newest(mut jobs: Vec<Job>) -> Vec<Job> {
     jobs.sort_by(|a, b| {
         b.updated_at
@@ -133,4 +198,100 @@ pub fn sort_jobs_newest(mut jobs: Vec<Job>) -> Vec<Job> {
             )
     });
     jobs
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::{now_iso, upsert_job, Job};
+    use crate::test_env::lock_env;
+    use std::fs;
+    use tempfile::tempdir;
+
+    #[test]
+    fn reconcile_marks_dead_pid_failed() {
+        let _guard = lock_env();
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join(".git")).unwrap();
+        let pdata = dir.path().join("pdata");
+        fs::create_dir_all(&pdata).unwrap();
+        std::env::set_var("CLAUDE_PLUGIN_DATA", &pdata);
+
+        let mut job = Job {
+            id: "task-dead-1".into(),
+            kind: Some("task".into()),
+            kind_label: Some("rescue".into()),
+            title: Some("Dead".into()),
+            workspace_root: Some(dir.path().display().to_string()),
+            job_class: Some("task".into()),
+            summary: Some("s".into()),
+            write: Some(true),
+            status: Some("running".into()),
+            phase: Some("running".into()),
+            progress_message: Some("Running Grok task…".into()),
+            // PID 0 is never alive in our checker.
+            pid: Some(0),
+            session_id: None,
+            grok_session_id: None,
+            log_file: None,
+            result_file: None,
+            exit_code: None,
+            error: None,
+            created_at: Some(now_iso()),
+            updated_at: Some(now_iso()),
+            started_at: Some(now_iso()),
+            finished_at: None,
+        };
+        upsert_job(dir.path(), job.clone()).unwrap();
+
+        let changed = reconcile_stale_job(dir.path(), &mut job).unwrap();
+        assert!(changed);
+        assert_eq!(job.status.as_deref(), Some("failed"));
+        assert!(job.error.as_deref().unwrap_or("").contains("no longer running"));
+        assert!(job.result_file.is_some());
+
+        std::env::remove_var("CLAUDE_PLUGIN_DATA");
+    }
+
+    #[test]
+    fn reconcile_leaves_live_pid_running() {
+        let _guard = lock_env();
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join(".git")).unwrap();
+        let pdata = dir.path().join("pdata");
+        fs::create_dir_all(&pdata).unwrap();
+        std::env::set_var("CLAUDE_PLUGIN_DATA", &pdata);
+
+        let mut job = Job {
+            id: "task-live-1".into(),
+            kind: Some("task".into()),
+            kind_label: Some("rescue".into()),
+            title: Some("Live".into()),
+            workspace_root: Some(dir.path().display().to_string()),
+            job_class: Some("task".into()),
+            summary: Some("s".into()),
+            write: Some(true),
+            status: Some("running".into()),
+            phase: Some("running".into()),
+            progress_message: Some("Running Grok task…".into()),
+            pid: Some(std::process::id()),
+            session_id: None,
+            grok_session_id: None,
+            log_file: None,
+            result_file: None,
+            exit_code: None,
+            error: None,
+            created_at: Some(now_iso()),
+            updated_at: Some(now_iso()),
+            started_at: Some(now_iso()),
+            finished_at: None,
+        };
+        upsert_job(dir.path(), job.clone()).unwrap();
+
+        let changed = reconcile_stale_job(dir.path(), &mut job).unwrap();
+        assert!(!changed);
+        assert_eq!(job.status.as_deref(), Some("running"));
+
+        std::env::remove_var("CLAUDE_PLUGIN_DATA");
+    }
 }

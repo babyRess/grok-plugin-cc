@@ -72,19 +72,53 @@ pub fn binary_available(program: &str, version_args: &[&str], cwd: Option<&Path>
     }
 }
 
-/// Best-effort process-tree terminate (Unix process group first).
+/// Return true if `pid` is currently alive and signalable by this process.
+///
+/// Uses `kill -0` on Unix (no signal delivered). On Windows, checks via `tasklist`.
+pub fn is_process_alive(pid: u32) -> bool {
+    if pid == 0 {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
+    #[cfg(not(unix))]
+    {
+        let output = Command::new("tasklist")
+            .args(["/FI", &format!("PID eq {pid}"), "/NH"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .output();
+        match output {
+            Ok(out) => {
+                let text = String::from_utf8_lossy(&out.stdout);
+                text.contains(&pid.to_string())
+            }
+            Err(_) => false,
+        }
+    }
+}
+
+/// Best-effort process-tree terminate (Unix process group / session first).
 pub fn terminate_process_tree(pid: u32) -> bool {
     if pid == 0 {
         return false;
     }
     #[cfg(unix)]
     {
-        // Try process group (negative pid)
-        let group_ok = unsafe { libc_kill(-(pid as i32), 15) };
+        // Prefer process group (negative pid) so detached workers die together.
+        let group_ok = kill_signal(-(pid as i32), 15);
         if group_ok {
             return true;
         }
-        return unsafe { libc_kill(pid as i32, 15) };
+        kill_signal(pid as i32, 15)
     }
     #[cfg(not(unix))]
     {
@@ -98,10 +132,8 @@ pub fn terminate_process_tree(pid: u32) -> bool {
 }
 
 #[cfg(unix)]
-unsafe fn libc_kill(pid: i32, sig: i32) -> bool {
-    // Use libc via nix-less raw syscall through Command alternative when libc crate absent.
-    // Prefer /bin/kill for portability without extra deps.
-    let _ = (pid, sig);
+fn kill_signal(pid: i32, _sig: i32) -> bool {
+    // Prefer /bin/kill for portability without a libc crate dependency.
     let arg = if pid < 0 {
         format!("-{pid}")
     } else {
@@ -116,6 +148,24 @@ unsafe fn libc_kill(pid: i32, sig: i32) -> bool {
         .unwrap_or(false)
 }
 
+/// Put the current process in a new session (and process group).
+///
+/// Used by background workers so they survive parent exit and can be canceled
+/// via process-group signals. Returns `true` on success.
+#[cfg(unix)]
+pub fn become_session_leader() -> bool {
+    // Avoid a libc crate dependency: call POSIX setsid via extern.
+    extern "C" {
+        fn setsid() -> i32;
+    }
+    unsafe { setsid() >= 0 }
+}
+
+#[cfg(not(unix))]
+pub fn become_session_leader() -> bool {
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -125,5 +175,15 @@ mod tests {
         let (ok, detail) = binary_available("node", &["--version"], None);
         assert!(ok, "{detail}");
         assert!(detail.contains('v') || detail.contains("node"), "{detail}");
+    }
+
+    #[test]
+    fn is_process_alive_self_and_dead() {
+        let self_pid = std::process::id();
+        assert!(is_process_alive(self_pid), "current process should be alive");
+        // PIDs are recycled eventually, but very high unused values are typically dead.
+        // 1 is init/launchd and is usually alive on Unix; use a likely-unused high pid.
+        // Safer check: pid 0 is always treated as not alive by our API.
+        assert!(!is_process_alive(0));
     }
 }

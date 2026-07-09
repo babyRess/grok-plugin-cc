@@ -1,12 +1,14 @@
 //! Background worker request files + detached spawn.
 
 use std::fs;
+use std::fs::OpenOptions;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use serde::{Deserialize, Serialize};
 
 use crate::error::{CompanionError, Result};
+use crate::process::become_session_leader;
 use crate::state::{ensure_state_dir, resolve_jobs_dir};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -79,10 +81,43 @@ pub fn read_worker_request(workspace: &Path, job_id: &str) -> Result<WorkerReque
     Ok(serde_json::from_str(&raw)?)
 }
 
+/// Path for a worker's combined stdout/stderr log.
+pub fn worker_log_path(workspace: &Path, job_id: &str) -> PathBuf {
+    resolve_jobs_dir(workspace).join(format!("{job_id}.log"))
+}
+
 /// Spawn this binary as a detached task-worker.
-pub fn spawn_detached_worker(cwd: &Path, job_id: &str) -> Result<u32> {
+///
+/// Returns `(pid, log_file_path)`. The worker is placed in a new session so it
+/// can outlive the parent Claude/Bash process, and stdio is redirected to a
+/// durable log (silent null stdio made mid-run crashes undiagnosable).
+pub fn spawn_detached_worker(cwd: &Path, job_id: &str) -> Result<(u32, PathBuf)> {
     let exe = std::env::current_exe()
         .map_err(|e| CompanionError::msg(format!("current_exe: {e}")))?;
+
+    ensure_state_dir(cwd)?;
+    let log_path = worker_log_path(cwd, job_id);
+    let log_file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .map_err(|e| CompanionError::msg(format!("open worker log {}: {e}", log_path.display())))?;
+    let log_err = log_file.try_clone().map_err(|e| {
+        CompanionError::msg(format!("clone worker log {}: {e}", log_path.display()))
+    })?;
+
+    // Header so restarts are visible in the log.
+    {
+        use std::io::Write;
+        let mut header = OpenOptions::new().append(true).open(&log_path).ok();
+        if let Some(ref mut f) = header {
+            let _ = writeln!(
+                f,
+                "\n--- task-worker start job={job_id} at {} ---\n",
+                chrono::Utc::now().to_rfc3339()
+            );
+        }
+    }
 
     let mut cmd = Command::new(exe);
     cmd.args([
@@ -94,16 +129,16 @@ pub fn spawn_detached_worker(cwd: &Path, job_id: &str) -> Result<u32> {
     ])
     .current_dir(cwd)
     .stdin(Stdio::null())
-    .stdout(Stdio::null())
-    .stderr(Stdio::null());
+    .stdout(Stdio::from(log_file))
+    .stderr(Stdio::from(log_err));
 
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
-        // Put worker in its own process group so cancel can signal it.
+        // New session + process group: survive parent death; cancel can signal the group.
         unsafe {
             cmd.pre_exec(|| {
-                libc_setpgid();
+                let _ = become_session_leader();
                 Ok(())
             });
         }
@@ -113,15 +148,7 @@ pub fn spawn_detached_worker(cwd: &Path, job_id: &str) -> Result<u32> {
         .spawn()
         .map_err(|e| CompanionError::msg(format!("failed to spawn task-worker: {e}")))?;
 
-    Ok(child.id())
-}
-
-#[cfg(unix)]
-fn libc_setpgid() {
-    // Avoid extra libc dep: shell out is not available in pre_exec.
-    // Use nix-less raw: setpgid(0,0) via libc crate would be ideal.
-    // For portability without libc, skip; cancel still kills by pid.
-    let _ = 0;
+    Ok((child.id(), log_path))
 }
 
 #[cfg(test)]

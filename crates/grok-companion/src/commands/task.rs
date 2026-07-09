@@ -8,7 +8,9 @@ use crate::claude_context::{
 };
 use crate::error::{CompanionError, Result};
 use crate::grok::{ensure_grok_ready, normalize_effort, run_grok_headless, HeadlessOptions};
-use crate::jobutil::{finish_job_with_session, latest_task_session, mark_running, new_job};
+use crate::jobutil::{
+    fail_job, finish_job_with_session, latest_task_session, mark_running, new_job,
+};
 use crate::render::{first_meaningful_line, json_pretty, render_task_result, shorten};
 use crate::state::{list_jobs, upsert_job};
 use crate::worker::{
@@ -108,13 +110,17 @@ pub fn run(args: TaskArgs) -> Result<i32> {
             },
         };
         write_worker_request(&workspace, &job.id, &payload)?;
-        let pid = spawn_detached_worker(&args.cwd, &job.id)?;
+        let (pid, log_path) = spawn_detached_worker(&args.cwd, &job.id)?;
         job.pid = Some(pid);
         job.status = Some("queued".into());
+        job.log_file = Some(log_path.display().to_string());
+        job.progress_message = Some("Queued background worker…".into());
         upsert_job(&workspace, job.clone())?;
         let message = format!(
-            "{title} started in the background as {}. Check status {} for progress.\n",
-            job.id, job.id
+            "{title} started in the background as {}. Check status {} for progress.\nLog: {}\n",
+            job.id,
+            job.id,
+            log_path.display()
         );
         if args.json {
             println!(
@@ -180,7 +186,7 @@ pub fn execute_task(
         None
     };
 
-    let result = run_grok_headless(
+    let result = match run_grok_headless(
         workspace,
         &prompt,
         &HeadlessOptions {
@@ -192,7 +198,15 @@ pub fn execute_task(
             capture_session: true,
             ..Default::default()
         },
-    )?;
+    ) {
+        Ok(r) => r,
+        Err(e) => {
+            // Never leave status=running if Grok fails to launch / wait errors out.
+            let summary = format!("Grok task failed before completion: {e}");
+            let _ = fail_job(workspace, job, 1, &summary);
+            return Err(e);
+        }
+    };
 
     let raw = result.stdout.trim();
     let body = if raw.is_empty() {

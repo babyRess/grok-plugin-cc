@@ -1,3 +1,10 @@
+## 0.1.5
+
+### Fixed
+- Background workers no longer leave permanent `status=running` markers when the process dies mid-task: `status` reaps dead PIDs and marks jobs failed
+- Detached `task-worker` now uses a real session (`setsid`) so it can survive parent shell exit, and redirects stdio to `{jobId}.log` instead of `/dev/null`
+- Task/review error paths call `fail_job` so launch/wait failures never stick as `running`
+
 ## 0.1.4
 
 ### Fixed

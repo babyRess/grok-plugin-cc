@@ -104,6 +104,13 @@ pub fn render_job_status(job: &Job) -> String {
         format!("Created: {}", job.created_at.as_deref().unwrap_or("?")),
         format!("Updated: {}", job.updated_at.as_deref().unwrap_or("?")),
     ];
+    if let Some(pid) = job.pid {
+        let alive = crate::process::is_process_alive(pid);
+        lines.push(format!(
+            "PID: {pid} ({})",
+            if alive { "alive" } else { "dead" }
+        ));
+    }
     if let Some(msg) = &job.progress_message {
         lines.push(format!("Progress: {msg}"));
     }
@@ -112,6 +119,9 @@ pub fn render_job_status(job: &Job) -> String {
     }
     if let Some(log) = &job.log_file {
         lines.push(format!("Log: {log}"));
+    }
+    if let Some(result) = &job.result_file {
+        lines.push(format!("Result: {result}"));
     }
     lines.push(String::new());
     lines.join("\n")
