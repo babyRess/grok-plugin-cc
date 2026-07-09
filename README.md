@@ -92,6 +92,7 @@ grok plugin install /absolute/path/to/grok-plugin-cc/plugins/grok --trust
 | `/grok:status` | Running / recent jobs |
 | `/grok:result` | Stored output for a finished job |
 | `/grok:cancel` | Cancel a background job |
+| `/grok:transfer` | Import latest Claude session transcript and continue in Grok |
 
 Also registers the `grok:grok-rescue` subagent for natural-language handoff (“ask Grok to…”).
 
@@ -168,11 +169,11 @@ This is an **early preview (v0.1.0)**. Please read before filing issues:
 4. **Review can be slow**  
    `/grok:review` embeds git status + a capped diff. Large dirty trees (tens of thousands of lines) take longer. Prefer `--background` or a smaller scope / clean tree.
 
-5. **Headless `grok -p` only**  
-   No ACP / `grok agent stdio` client yet. No Claude↔Grok transcript transfer. No first-class `grok -r` session id plumbing.
+5. **Headless `grok -p` default**  
+   Session IDs are captured via JSON output (`sessionId`) and shown after tasks. Resume with `/grok:rescue --resume` (uses stored id or `-c`). Full ACP (`grok agent stdio`) is reserved (`--runtime acp` exits with a roadmap message).
 
 6. **Stop review gate is optional and aggressive**  
-   Can create Claude↔Grok loops and burn usage. Off by default.
+   Can create Claude↔Grok loops and burn usage. Off by default. Re-entry is keyed by Claude message hash (ALLOW skip / max 2 BLOCKs per message).
 
 7. **Rust binary is not shipped in git**  
    `plugins/grok/bin/grok-companion` is gitignored; users build with `npm run install:rust-bin` or use the Node companion.
@@ -244,9 +245,11 @@ grok-plugin-cc/
 - [x] Rust companion full CLI
 - [x] Live integration tests against real local `grok`
 - [x] Compact Claude skills/MCP inheritance
-- [ ] ACP client over `grok agent stdio`
-- [ ] Capture Grok session IDs for `grok -r` resume
-- [ ] `/grok:transfer` Claude transcript → Grok session
+- [x] Capture Grok `sessionId` (JSON) + resume via stored id / `-c`
+- [x] `/grok:transfer` Claude transcript → Grok handoff prompt
+- [x] Smart review diffs for large dirty trees
+- [x] Stop-gate hardened (message-hash re-entry, block cap)
+- [ ] Full ACP client over `grok agent stdio` (flag reserved)
 - [ ] Structured review JSON via `--json-schema`
 
 ---

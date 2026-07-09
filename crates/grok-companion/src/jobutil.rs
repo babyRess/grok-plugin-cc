@@ -60,6 +60,21 @@ pub fn finish_job(
     rendered: &str,
     summary: &str,
 ) -> Result<()> {
+    finish_job_with_session(workspace, job, exit_status, payload, rendered, summary, None)
+}
+
+pub fn finish_job_with_session(
+    workspace: &Path,
+    job: &mut Job,
+    exit_status: i32,
+    payload: Value,
+    rendered: &str,
+    summary: &str,
+    grok_session_id: Option<String>,
+) -> Result<()> {
+    if let Some(ref sid) = grok_session_id {
+        job.grok_session_id = Some(sid.clone());
+    }
     let result_path = write_job_result(
         workspace,
         &job.id,
@@ -69,6 +84,7 @@ pub fn finish_job(
             "payload": payload,
             "rendered": rendered,
             "summary": summary,
+            "grokSessionId": job.grok_session_id,
             "finishedAt": now_iso()
         }),
     )?;
@@ -86,6 +102,17 @@ pub fn finish_job(
         job.error = Some(summary.into());
     }
     upsert_job(workspace, job.clone())
+}
+
+/// Latest completed/failed task job with a Grok session id, if any.
+pub fn latest_task_session(workspace: &Path) -> Option<String> {
+    sort_jobs_newest(crate::state::list_jobs(workspace))
+        .into_iter()
+        .find(|j| {
+            (j.job_class.as_deref() == Some("task") || j.kind.as_deref() == Some("task"))
+                && j.grok_session_id.as_ref().is_some_and(|s| !s.is_empty())
+        })
+        .and_then(|j| j.grok_session_id)
 }
 
 pub fn is_active(status: Option<&str>) -> bool {

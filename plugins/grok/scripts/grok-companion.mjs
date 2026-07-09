@@ -52,6 +52,7 @@ import {
   nowIso,
   runTrackedJob
 } from "./lib/tracked-jobs.mjs";
+import { buildTransferPrompt, findLatestClaudeSession } from "./lib/transfer.mjs";
 import { resolveWorkspaceRoot } from "./lib/workspace.mjs";
 
 const ROOT_DIR = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
@@ -69,7 +70,8 @@ function printUsage() {
       "  node scripts/grok-companion.mjs status [job-id] [--all] [--json]",
       "  node scripts/grok-companion.mjs result [job-id] [--json]",
       "  node scripts/grok-companion.mjs cancel [job-id] [--json]",
-      "  node scripts/grok-companion.mjs task-resume-candidate [--json]"
+      "  node scripts/grok-companion.mjs task-resume-candidate [--json]",
+      "  node scripts/grok-companion.mjs transfer [--source <session.jsonl>] [--read-only] [--background]"
     ].join("\n")
   );
 }
@@ -358,12 +360,26 @@ async function executeTaskRun(request) {
   prompt = maybeInjectClaudeContext(prompt, request.cwd, inheritClaudeContext, detail);
 
   const write = Boolean(request.write);
+
+  // Prefer last known Grok session when resuming.
+  let resumeSessionId = null;
+  if (continueLatest) {
+    const jobs = sortJobsNewestFirst(listJobs(workspaceRoot));
+    const prior = jobs.find(
+      (j) =>
+        (j.jobClass === "task" || j.kind === "task") &&
+        j.grokSessionId
+    );
+    resumeSessionId = prior?.grokSessionId ?? null;
+  }
+
   const result = await runGrokHeadless(workspaceRoot, {
     prompt,
     model: request.model,
     effort: request.effort,
     write,
-    continueLatest,
+    continueLatest: continueLatest && !resumeSessionId,
+    resumeSessionId,
     onProgress: request.onProgress
   });
 
@@ -372,10 +388,13 @@ async function executeTaskRun(request) {
   const isStopGate = String(prompt).includes(STOP_REVIEW_TASK_MARKER);
   const title = isStopGate ? "Grok Stop Gate Review" : request.resumeLast ? "Grok Resume" : "Grok Task";
 
-  const rendered = renderTaskResult(
+  let rendered = renderTaskResult(
     { rawOutput, failureMessage },
     { title, jobId: request.jobId ?? null, write }
   );
+  if (result.grokSessionId) {
+    rendered += `\n\nGrok session: \`${result.grokSessionId}\`\nResume: \`grok -r ${result.grokSessionId}\` or \`/grok:rescue --resume\`\n`;
+  }
 
   return {
     exitStatus: result.status,
@@ -731,10 +750,41 @@ async function main() {
     case "cancel":
       await handleCancel(argv);
       break;
+    case "transfer":
+      await handleTransfer(argv);
+      break;
     default:
       printUsage();
       throw new Error(`Unknown command: ${command}`);
   }
+}
+
+async function handleTransfer(argv) {
+  const { options } = parseCommandInput(argv, {
+    booleanOptions: ["read-only", "background", "json"],
+    valueOptions: ["source", "cwd"]
+  });
+  const cwd = resolveCommandCwd(options);
+  const source = options.source
+    ? path.resolve(cwd, options.source)
+    : findLatestClaudeSession(cwd);
+  const handoff = buildTransferPrompt(source);
+  process.stderr.write(
+    `[grok] Transfer: ${handoff.turns} turns from ${handoff.source}\n`
+  );
+  // Re-enter task path
+  const taskArgv = [];
+  if (options.background) {
+    taskArgv.push("--background");
+  }
+  if (options["read-only"]) {
+    taskArgv.push("--read-only");
+  }
+  if (options.json) {
+    taskArgv.push("--json");
+  }
+  taskArgv.push("--", handoff.prompt);
+  await handleTask(taskArgv);
 }
 
 main().catch((error) => {

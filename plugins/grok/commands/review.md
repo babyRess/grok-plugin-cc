@@ -46,7 +46,7 @@ Background flow:
 - Launch the review with `Bash` in the background (Node companion supports `--background`; Rust binary is foreground-only for now — resolve-companion falls back as needed):
 ```text
 Bash({
-  command: `node "${CLAUDE_PLUGIN_ROOT}/scripts/grok-companion.mjs" review $ARGUMENTS --background`,
+  command: `node "${CLAUDE_PLUGIN_ROOT}/scripts/resolve-companion.mjs" review $ARGUMENTS --background`,
   description: "Grok review",
   run_in_background: true
 })

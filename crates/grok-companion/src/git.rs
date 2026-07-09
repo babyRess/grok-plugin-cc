@@ -4,7 +4,13 @@ use crate::error::{CompanionError, Result};
 use crate::process::run_command;
 use crate::workspace::resolve_workspace_root;
 
-const MAX_DIFF_CHARS: usize = 120_000;
+/// Default full-diff budget (bytes). Large dirty trees get a smarter summary instead.
+pub const DEFAULT_MAX_DIFF_CHARS: usize = 40_000;
+/// Above this raw diff size, prefer name-status + sampled patches.
+const SMART_DIFF_THRESHOLD: usize = 24_000;
+const MAX_FILES_LISTED: usize = 80;
+const MAX_SAMPLED_FILES: usize = 12;
+const MAX_PER_FILE_PATCH: usize = 4_000;
 
 #[derive(Debug, Clone)]
 pub struct ReviewTarget {
@@ -86,7 +92,16 @@ pub fn resolve_review_target(
     })
 }
 
+/// Collect review context with smart diff truncation for large trees.
 pub fn collect_review_context(cwd: &Path, target: &ReviewTarget) -> Result<ReviewContext> {
+    collect_review_context_with_limit(cwd, target, DEFAULT_MAX_DIFF_CHARS)
+}
+
+pub fn collect_review_context_with_limit(
+    cwd: &Path,
+    target: &ReviewTarget,
+    max_diff_chars: usize,
+) -> Result<ReviewContext> {
     let repo_root = if target.repo_root.as_os_str().is_empty() {
         resolve_workspace_root(cwd)
     } else {
@@ -103,7 +118,7 @@ pub fn collect_review_context(cwd: &Path, target: &ReviewTarget) -> Result<Revie
         }
     };
 
-    let (status, summary, mut diff) = if target.kind == "branch" {
+    let (status, summary, raw_diff, name_status) = if target.kind == "branch" {
         let base = target.base.as_deref().unwrap_or("main");
         let (_, log, _) = git(
             &repo_root,
@@ -112,12 +127,16 @@ pub fn collect_review_context(cwd: &Path, target: &ReviewTarget) -> Result<Revie
         let (_, shortstat, _) =
             git(&repo_root, &["diff", "--shortstat", &format!("{base}...HEAD")])?;
         let (_, full_diff, _) = git(&repo_root, &["diff", &format!("{base}...HEAD")])?;
+        let (_, names, _) = git(
+            &repo_root,
+            &["diff", "--name-status", &format!("{base}...HEAD")],
+        )?;
         let summary = if shortstat.trim().is_empty() {
             "No branch diff.".into()
         } else {
             shortstat.trim().to_string()
         };
-        (log.trim().to_string(), summary, full_diff)
+        (log.trim().to_string(), summary, full_diff, names)
     } else {
         let (_, st, _) = git(
             &repo_root,
@@ -127,6 +146,8 @@ pub fn collect_review_context(cwd: &Path, target: &ReviewTarget) -> Result<Revie
         let (_, unstaged, _) = git(&repo_root, &["diff"])?;
         let (_, cached_ss, _) = git(&repo_root, &["diff", "--shortstat", "--cached"])?;
         let (_, unstaged_ss, _) = git(&repo_root, &["diff", "--shortstat"])?;
+        let (_, names_c, _) = git(&repo_root, &["diff", "--name-status", "--cached"])?;
+        let (_, names_u, _) = git(&repo_root, &["diff", "--name-status"])?;
         let parts: Vec<&str> = [cached_ss.trim(), unstaged_ss.trim()]
             .into_iter()
             .filter(|s| !s.is_empty())
@@ -150,15 +171,15 @@ pub fn collect_review_context(cwd: &Path, target: &ReviewTarget) -> Result<Revie
             }
             d.push_str(&unstaged);
         }
-        (st.trim().to_string(), summary, d)
+        let mut names = names_c;
+        if !names.is_empty() && !names_u.is_empty() {
+            names.push('\n');
+        }
+        names.push_str(&names_u);
+        (st.trim().to_string(), summary, d, names)
     };
 
-    if diff.len() > MAX_DIFF_CHARS {
-        diff = format!(
-            "{}\n\n...[diff truncated at {MAX_DIFF_CHARS} chars]...",
-            &diff[..MAX_DIFF_CHARS]
-        );
-    }
+    let diff = build_smart_diff(&raw_diff, &name_status, max_diff_chars);
 
     Ok(ReviewContext {
         repo_root,
@@ -168,4 +189,133 @@ pub fn collect_review_context(cwd: &Path, target: &ReviewTarget) -> Result<Revie
         summary,
         diff,
     })
+}
+
+fn build_smart_diff(raw_diff: &str, name_status: &str, max_diff_chars: usize) -> String {
+    if raw_diff.is_empty() {
+        return String::new();
+    }
+
+    // Small enough: use full diff (still hard-capped).
+    if raw_diff.len() <= SMART_DIFF_THRESHOLD.min(max_diff_chars) {
+        return hard_cap(raw_diff, max_diff_chars);
+    }
+
+    // Large: name-status list + sample of first N file patches.
+    let mut out = String::new();
+    out.push_str(&format!(
+        "[smart-diff] Full diff is large ({} chars). Showing name-status + sampled patches.\n\n",
+        raw_diff.len()
+    ));
+
+    let files: Vec<&str> = name_status
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
+    out.push_str(&format!("### Changed files ({})\n", files.len()));
+    for line in files.iter().take(MAX_FILES_LISTED) {
+        out.push_str(line);
+        out.push('\n');
+    }
+    if files.len() > MAX_FILES_LISTED {
+        out.push_str(&format!(
+            "... {} more files omitted\n",
+            files.len() - MAX_FILES_LISTED
+        ));
+    }
+    out.push('\n');
+
+    // Sample patches by splitting raw diff on "diff --git"
+    let patches = split_git_patches(raw_diff);
+    out.push_str(&format!(
+        "### Sampled patches (first {} of {})\n",
+        MAX_SAMPLED_FILES.min(patches.len()),
+        patches.len()
+    ));
+    for patch in patches.iter().take(MAX_SAMPLED_FILES) {
+        let mut p = (*patch).to_string();
+        if p.len() > MAX_PER_FILE_PATCH {
+            let mut end = MAX_PER_FILE_PATCH.min(p.len());
+            while end > 0 && !p.is_char_boundary(end) {
+                end -= 1;
+            }
+            p.truncate(end);
+            p.push_str("\n...[file patch truncated]...\n");
+        }
+        out.push_str(&p);
+        if !out.ends_with('\n') {
+            out.push('\n');
+        }
+        out.push('\n');
+        if out.len() >= max_diff_chars {
+            break;
+        }
+    }
+
+    hard_cap(&out, max_diff_chars)
+}
+
+fn split_git_patches(diff: &str) -> Vec<&str> {
+    if diff.is_empty() {
+        return Vec::new();
+    }
+    let mut parts = Vec::new();
+    let mut start = 0;
+    let bytes = diff.as_bytes();
+    let marker = b"diff --git ";
+    let mut i = 0;
+    while i + marker.len() <= bytes.len() {
+        if &bytes[i..i + marker.len()] == marker && i > start {
+            parts.push(&diff[start..i]);
+            start = i;
+        }
+        i += 1;
+    }
+    if start < diff.len() {
+        parts.push(&diff[start..]);
+    }
+    if parts.is_empty() {
+        parts.push(diff);
+    }
+    parts
+}
+
+fn hard_cap(s: &str, max: usize) -> String {
+    if s.len() <= max {
+        return s.to_string();
+    }
+    let mut end = max.min(s.len());
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!(
+        "{}\n\n...[diff truncated at {max} chars]...",
+        &s[..end]
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn smart_diff_uses_summary_for_large_input() {
+        let mut huge = String::from("diff --git a/a.rs b/a.rs\n+line\n");
+        while huge.len() < SMART_DIFF_THRESHOLD + 1000 {
+            huge.push_str("diff --git a/x.rs b/x.rs\n+more\n");
+        }
+        let names = "M\ta.rs\nM\tx.rs\n";
+        let out = build_smart_diff(&huge, names, DEFAULT_MAX_DIFF_CHARS);
+        assert!(out.contains("smart-diff"));
+        assert!(out.contains("Changed files"));
+        assert!(out.len() <= DEFAULT_MAX_DIFF_CHARS + 80);
+    }
+
+    #[test]
+    fn small_diff_kept_verbatim() {
+        let small = "diff --git a/a.rs b/a.rs\n+hi\n";
+        let out = build_smart_diff(small, "M\ta.rs\n", DEFAULT_MAX_DIFF_CHARS);
+        assert_eq!(out, small);
+    }
 }

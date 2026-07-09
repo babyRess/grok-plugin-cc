@@ -26,6 +26,8 @@ pub struct GrokRunResult {
     pub status: i32,
     pub stdout: String,
     pub stderr: String,
+    /// Grok session UUID when captured via `--output-format json`.
+    pub session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -36,6 +38,8 @@ pub struct HeadlessOptions {
     pub continue_latest: bool,
     pub resume_session_id: Option<String>,
     pub max_turns: Option<u32>,
+    /// Prefer JSON wire format to capture `sessionId` (default true).
+    pub capture_session: bool,
 }
 
 pub fn resolve_grok_binary() -> PathBuf {
@@ -252,11 +256,15 @@ pub fn run_grok_headless(
     }
 
     let bin = resolve_grok_binary();
+    // Always use JSON wire format so we can capture sessionId and extract `.text`.
+    let use_json = true;
+    let output_format = "json";
+    let _ = options.capture_session;
     let mut args: Vec<String> = vec![
         "-p".into(),
         prompt.into(),
         "--output-format".into(),
-        "plain".into(),
+        output_format.into(),
         "--cwd".into(),
         cwd.display().to_string(),
         // Required for headless: never wait on interactive tool approval.
@@ -284,8 +292,10 @@ pub fn run_grok_headless(
     if let Some(sid) = &options.resume_session_id {
         args.push("-r".into());
         args.push(sid.clone());
+        eprintln!("[grok] Resuming session {sid}");
     } else if options.continue_latest {
         args.push("-c".into());
+        eprintln!("[grok] Continuing latest session in cwd (-c)");
     }
 
     if options.write {
@@ -361,25 +371,12 @@ pub fn run_grok_headless(
         })
     });
 
-    // Stream stdout as it arrives (Grok often only prints at the end).
+    // Collect stdout (JSON is parsed after exit; avoid dumping raw JSON mid-run).
     let stdout_handle = child.stdout.take().map(|mut stdout| {
         std::thread::spawn(move || {
             use std::io::Read;
             let mut buf = String::new();
-            let mut chunk = [0u8; 4096];
-            loop {
-                match stdout.read(&mut chunk) {
-                    Ok(0) => break,
-                    Ok(n) => {
-                        let s = String::from_utf8_lossy(&chunk[..n]);
-                        // Live preview on stderr so final report stays clean on stdout path
-                        eprint!("{s}");
-                        let _ = std::io::Write::flush(&mut std::io::stderr());
-                        buf.push_str(&s);
-                    }
-                    Err(_) => break,
-                }
-            }
+            let _ = stdout.read_to_string(&mut buf);
             buf
         })
     });
@@ -401,6 +398,10 @@ pub fn run_grok_headless(
     };
 
     let code = status.code().unwrap_or(1);
+    let (display_stdout, session_id) = parse_grok_stdout(&stdout, use_json);
+    if let Some(ref sid) = session_id {
+        eprintln!("[grok] sessionId={sid}");
+    }
     if code == 0 {
         eprintln!("\n[grok] Finished successfully.");
     } else {
@@ -409,9 +410,51 @@ pub fn run_grok_headless(
 
     Ok(GrokRunResult {
         status: code,
-        stdout,
+        stdout: display_stdout,
         stderr,
+        session_id,
     })
+}
+
+/// Parse plain or JSON grok -p output into (text, session_id).
+pub fn parse_grok_stdout(raw: &str, expect_json: bool) -> (String, Option<String>) {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return (String::new(), None);
+    }
+    // Always try JSON first if it looks like an object
+    if expect_json || trimmed.starts_with('{') {
+        if let Ok(v) = serde_json::from_str::<Value>(trimmed) {
+            let text = v
+                .get("text")
+                .and_then(|t| t.as_str())
+                .unwrap_or(trimmed)
+                .to_string();
+            let sid = v
+                .get("sessionId")
+                .or_else(|| v.get("session_id"))
+                .and_then(|s| s.as_str())
+                .map(str::to_string);
+            return (text, sid);
+        }
+        // streaming-json: take last JSON object line
+        if let Some(line) = trimmed.lines().rev().find(|l| l.trim().starts_with('{')) {
+            if let Ok(v) = serde_json::from_str::<Value>(line) {
+                let text = v
+                    .get("text")
+                    .and_then(|t| t.as_str())
+                    .unwrap_or(line)
+                    .to_string();
+                let sid = v
+                    .get("sessionId")
+                    .or_else(|| v.get("session_id"))
+                    .and_then(|s| s.as_str())
+                    .map(str::to_string);
+                return (text, sid);
+            }
+        }
+    }
+    (raw.to_string(), None)
 }
 
 pub fn run_grok_review(

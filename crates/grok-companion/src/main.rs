@@ -1,3 +1,4 @@
+mod acp;
 mod claude_context;
 mod commands;
 mod error;
@@ -9,6 +10,7 @@ mod render;
 mod state;
 #[cfg(test)]
 mod test_env;
+mod transfer;
 mod worker;
 mod workspace;
 
@@ -25,6 +27,7 @@ use commands::setup::{self, SetupArgs};
 use commands::status::{self, StatusArgs};
 use commands::task::{self, TaskArgs};
 use commands::task_worker::{self, TaskWorkerArgs};
+use commands::transfer::TransferArgs;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -33,6 +36,10 @@ use commands::task_worker::{self, TaskWorkerArgs};
     about = "Rust companion for the Grok Claude Code plugin (full CLI parity)"
 )]
 struct Cli {
+    /// Runtime backend (headless default; acp reserved / not implemented yet)
+    #[arg(long, global = true, default_value = "headless")]
+    runtime: String,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -180,6 +187,21 @@ enum Commands {
         #[arg(long, short = 'C')]
         cwd: Option<PathBuf>,
     },
+
+    /// Import a Claude Code transcript and continue in Grok
+    Transfer {
+        /// Path to Claude session `.jsonl` (default: latest for this workspace)
+        #[arg(long)]
+        source: Option<PathBuf>,
+        #[arg(long = "read-only")]
+        read_only: bool,
+        #[arg(long)]
+        background: bool,
+        #[arg(long)]
+        json: bool,
+        #[arg(long, short = 'C')]
+        cwd: Option<PathBuf>,
+    },
 }
 
 fn resolve_cwd(cwd: Option<PathBuf>) -> PathBuf {
@@ -188,6 +210,19 @@ fn resolve_cwd(cwd: Option<PathBuf>) -> PathBuf {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    if let Some(kind) = acp::RuntimeKind::parse(&cli.runtime) {
+        if kind == acp::RuntimeKind::Acp {
+            eprintln!("{}", acp::acp_not_implemented_message());
+            return ExitCode::from(2);
+        }
+    } else {
+        eprintln!(
+            "Unknown --runtime {:?}. Use headless (default) or acp (planned).",
+            cli.runtime
+        );
+        return ExitCode::from(2);
+    }
+
     let result = match cli.command {
         Commands::Setup {
             enable_review_gate,
@@ -312,6 +347,19 @@ fn main() -> ExitCode {
                 cwd: resolve_cwd(cwd),
             })
         }
+        Commands::Transfer {
+            source,
+            read_only,
+            background,
+            json,
+            cwd,
+        } => commands::transfer::run(TransferArgs {
+            source,
+            write: !read_only,
+            background,
+            json,
+            cwd: resolve_cwd(cwd),
+        }),
     };
 
     match result {

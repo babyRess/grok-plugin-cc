@@ -29,7 +29,8 @@ const RUST_COMMANDS = new Set([
   "task-worker",
   "result",
   "cancel",
-  "task-resume-candidate"
+  "task-resume-candidate",
+  "transfer"
 ]);
 
 function run(bin, args, useNode = false) {

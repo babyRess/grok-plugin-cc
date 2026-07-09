@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.1
+
+### Added
+- `/grok:transfer` — Claude session jsonl → Grok handoff task
+- Grok `sessionId` capture (JSON wire format) + resume via stored id
+- Smart review diffs (name-status + sampled patches for large trees)
+- Stop-gate re-entry by Claude message hash (ALLOW skip; max 2 BLOCKs)
+
+### Fixed / polish
+- All slash commands use `resolve-companion.mjs`
+- UTF-8 safe Claude context truncation
+- `--runtime acp` reserved (not implemented yet)
+
 ## 0.1.0
 
 Initial public preview of the Grok plugin for Claude Code.

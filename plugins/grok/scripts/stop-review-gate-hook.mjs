@@ -16,15 +16,15 @@ import { fileURLToPath } from "node:url";
 import { getGrokLoginStatus } from "./lib/grok.mjs";
 import { loadPromptTemplate, interpolateTemplate } from "./lib/prompts.mjs";
 import { getConfig, listJobs } from "./lib/state.mjs";
-import { sortJobsNewestFirst } from "./lib/job-control.mjs";
 import { SESSION_ID_ENV } from "./lib/tracked-jobs.mjs";
 import { resolveWorkspaceRoot } from "./lib/workspace.mjs";
 
 const STOP_REVIEW_TIMEOUT_MS = 15 * 60 * 1000;
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const ROOT_DIR = path.resolve(SCRIPT_DIR, "..");
-const COMPANION = path.join(SCRIPT_DIR, "grok-companion.mjs");
+const COMPANION = path.join(SCRIPT_DIR, "resolve-companion.mjs");
 const STOP_REVIEW_TASK_MARKER = "Run a stop-gate review of the previous Claude turn.";
+const GATE_MARKER_FILE = ".stop-gate-last.json";
 
 function readHookInput() {
   const raw = fs.readFileSync(0, "utf8").trim();
@@ -57,6 +57,48 @@ function filterJobsForCurrentSession(jobs, input = {}) {
   return jobs.filter((job) => job.sessionId === sessionId);
 }
 
+function gateStatePath(workspaceRoot) {
+  // Prefer plugin data if set; else workspace-local temp under jobs dir is awkward —
+  // store next to companion state via CLAUDE_PLUGIN_DATA if present.
+  const data = process.env.CLAUDE_PLUGIN_DATA || process.env.GROK_PLUGIN_DATA;
+  if (data) {
+    return path.join(data, GATE_MARKER_FILE);
+  }
+  return path.join(workspaceRoot, ".grok-companion-stop-gate.json");
+}
+
+function readGateState(workspaceRoot) {
+  const p = gateStatePath(workspaceRoot);
+  try {
+    if (!fs.existsSync(p)) {
+      return null;
+    }
+    return JSON.parse(fs.readFileSync(p, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function writeGateState(workspaceRoot, state) {
+  const p = gateStatePath(workspaceRoot);
+  try {
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+  } catch (e) {
+    logNote(`stop-gate: failed to persist gate state: ${e.message}`);
+  }
+}
+
+function hashMessage(text) {
+  // Lightweight stable hash — enough to detect same Claude turn vs new work.
+  let h = 0;
+  const s = String(text || "");
+  for (let i = 0; i < s.length; i += 1) {
+    h = (Math.imul(31, h) + s.charCodeAt(i)) | 0;
+  }
+  return String(h);
+}
+
 function buildStopReviewPrompt(input = {}) {
   const lastAssistantMessage = String(input.last_assistant_message ?? "").trim();
   let template = "";
@@ -81,7 +123,7 @@ BLOCK: <concrete issues Claude must fix before stopping>
   });
 }
 
-function parseStopReviewOutput(rawOutput) {
+export function parseStopReviewOutput(rawOutput) {
   const text = String(rawOutput ?? "").trim();
   if (!text) {
     return {
@@ -91,16 +133,19 @@ function parseStopReviewOutput(rawOutput) {
     };
   }
 
-  const firstLine = text.split(/\r?\n/, 1)[0].trim();
-  if (firstLine.startsWith("ALLOW:")) {
-    return { ok: true, reason: firstLine.slice("ALLOW:".length).trim() || "allowed" };
-  }
-  if (firstLine.startsWith("BLOCK:")) {
-    return { ok: false, reason: text };
+  // Prefer first ALLOW:/BLOCK: line anywhere in first 20 lines
+  const lines = text.split(/\r?\n/).slice(0, 20);
+  for (const line of lines) {
+    const t = line.trim();
+    if (t.startsWith("ALLOW:")) {
+      return { ok: true, reason: t.slice("ALLOW:".length).trim() || "allowed" };
+    }
+    if (t.startsWith("BLOCK:")) {
+      return { ok: false, reason: text };
+    }
   }
 
-  // Heuristic: if the model forgot the prefix, look for block language
-  if (/\bBLOCK\b/i.test(text) && !/\bALLOW\b/i.test(text.split(/\r?\n/, 1)[0])) {
+  if (/\bBLOCK\b/i.test(text) && !/^\s*ALLOW:/im.test(text)) {
     return { ok: false, reason: text };
   }
 
@@ -123,7 +168,6 @@ function main() {
     return;
   }
 
-  // Skip if a companion job is already running in this session
   const active = filterJobsForCurrentSession(listJobs(workspaceRoot), input).filter(
     (j) => j.status === "running" || j.status === "queued"
   );
@@ -132,16 +176,42 @@ function main() {
     return;
   }
 
-  // Avoid re-entry loops: if the last job was already a stop-gate, allow stop
-  const recent = sortJobsNewestFirst(listJobs(workspaceRoot))[0];
-  if (recent?.title === "Grok Stop Gate Review" && recent.status === "completed") {
+  const msgHash = hashMessage(input.last_assistant_message);
+  const prior = readGateState(workspaceRoot);
+
+  // Only skip re-entry when we already ALLOWed the *same* Claude message.
+  // A prior BLOCK for this message must re-run after Claude tries to fix.
+  // A completed stop-gate job for a *different* message must still run.
+  if (prior?.decision === "ALLOW" && prior?.messageHash === msgHash) {
+    logNote("Stop review gate: already ALLOW for this Claude turn; skipping.");
+    return;
+  }
+
+  // Prevent infinite BLOCK loops: if we blocked this exact message twice, allow with note.
+  if (prior?.decision === "BLOCK" && prior?.messageHash === msgHash && (prior.blockCount || 0) >= 2) {
+    logNote(
+      "Stop review gate: already BLOCKed this Claude turn twice — allowing stop to avoid infinite loop. Re-enable after addressing issues."
+    );
+    writeGateState(workspaceRoot, {
+      decision: "ALLOW",
+      messageHash: msgHash,
+      reason: "max block count for same message",
+      at: new Date().toISOString()
+    });
     return;
   }
 
   const prompt = buildStopReviewPrompt(input);
   const result = spawnSync(
     process.execPath,
-    [COMPANION, "task", "--read-only", "--", prompt],
+    [
+      COMPANION,
+      "task",
+      "--read-only",
+      "--no-inherit-claude-context",
+      "--",
+      prompt
+    ],
     {
       cwd: workspaceRoot,
       encoding: "utf8",
@@ -156,11 +226,29 @@ function main() {
 
   if (decision.ok) {
     logNote(`Stop review gate: ALLOW (${decision.reason})`);
+    writeGateState(workspaceRoot, {
+      decision: "ALLOW",
+      messageHash: msgHash,
+      reason: decision.reason,
+      at: new Date().toISOString()
+    });
     return;
   }
 
-  logNote("Stop review gate: BLOCK");
-  // Claude Code Stop hook: return decision to block
+  const blockCount =
+    prior?.decision === "BLOCK" && prior?.messageHash === msgHash
+      ? (prior.blockCount || 0) + 1
+      : 1;
+
+  logNote(`Stop review gate: BLOCK (count=${blockCount})`);
+  writeGateState(workspaceRoot, {
+    decision: "BLOCK",
+    messageHash: msgHash,
+    reason: decision.reason,
+    blockCount,
+    at: new Date().toISOString()
+  });
+
   emitDecision({
     decision: "block",
     reason: decision.reason || output || "Grok stop-gate review found issues."

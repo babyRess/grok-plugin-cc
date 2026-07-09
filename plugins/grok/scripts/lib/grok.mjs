@@ -142,8 +142,9 @@ export function runGrokHeadless(cwd, options) {
   const args = [
     "-p",
     prompt,
+    // JSON so we can capture sessionId and extract .text
     "--output-format",
-    "plain",
+    "json",
     "--cwd",
     cwd,
     "--always-approve"
@@ -221,7 +222,11 @@ export function runGrokHeadless(cwd, options) {
     });
 
     child.on("close", (code) => {
-      const finalMessage = stdout.trim();
+      const parsed = parseGrokStdout(stdout);
+      const finalMessage = parsed.text;
+      if (parsed.sessionId && onProgress) {
+        onProgress({ message: `sessionId=${parsed.sessionId}`, phase: "completed" });
+      }
       if (onProgress) {
         onProgress({
           message: code === 0 ? "Grok finished." : `Grok exited with code ${code}.`,
@@ -230,13 +235,53 @@ export function runGrokHeadless(cwd, options) {
       }
       resolve({
         status: code ?? 1,
-        stdout,
+        stdout: finalMessage,
         stderr,
-        grokSessionId: null,
+        grokSessionId: parsed.sessionId ?? null,
         finalMessage
       });
     });
   });
+}
+
+/**
+ * @param {string} raw
+ * @returns {{ text: string, sessionId: string | null }}
+ */
+export function parseGrokStdout(raw) {
+  const trimmed = String(raw ?? "").trim();
+  if (!trimmed) {
+    return { text: "", sessionId: null };
+  }
+  if (trimmed.startsWith("{")) {
+    try {
+      const v = JSON.parse(trimmed);
+      return {
+        text: typeof v.text === "string" ? v.text : trimmed,
+        sessionId: v.sessionId || v.session_id || null
+      };
+    } catch {
+      // fall through
+    }
+  }
+  // last JSON line (streaming)
+  const lines = trimmed.split(/\r?\n/).reverse();
+  for (const line of lines) {
+    const t = line.trim();
+    if (!t.startsWith("{")) {
+      continue;
+    }
+    try {
+      const v = JSON.parse(t);
+      return {
+        text: typeof v.text === "string" ? v.text : trimmed,
+        sessionId: v.sessionId || v.session_id || null
+      };
+    } catch {
+      // continue
+    }
+  }
+  return { text: raw, sessionId: null };
 }
 
 /**

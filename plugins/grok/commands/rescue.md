@@ -38,7 +38,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/resolve-companion.mjs" task-resume-candidate
 
 Operating rules:
 
-- The subagent is a thin forwarder only. It should use one `Bash` call to invoke `node "${CLAUDE_PLUGIN_ROOT}/scripts/grok-companion.mjs" task ...` and return that command's stdout as-is.
+- The subagent is a thin forwarder only. It should use one `Bash` call to invoke `node "${CLAUDE_PLUGIN_ROOT}/scripts/resolve-companion.mjs" task ...` and return that command's stdout as-is.
 - Return the Grok companion stdout verbatim to the user.
 - Do not paraphrase, summarize, rewrite, or add commentary before or after it.
 - Leave `--effort` unset unless the user explicitly asks for a specific reasoning effort.

@@ -8,7 +8,7 @@ use crate::claude_context::{
 };
 use crate::error::{CompanionError, Result};
 use crate::grok::{ensure_grok_ready, normalize_effort, run_grok_headless, HeadlessOptions};
-use crate::jobutil::{finish_job, mark_running, new_job};
+use crate::jobutil::{finish_job_with_session, latest_task_session, mark_running, new_job};
 use crate::render::{first_meaningful_line, json_pretty, render_task_result, shorten};
 use crate::state::{list_jobs, upsert_job};
 use crate::worker::{
@@ -173,6 +173,13 @@ pub fn execute_task(
     let prompt =
         maybe_inject_claude_context_with_detail(prompt, cwd, inherit_claude_context, detail);
 
+    // Prefer explicit session resume when we know the last Grok session id.
+    let resume_session_id = if resume_last {
+        latest_task_session(workspace)
+    } else {
+        None
+    };
+
     let result = run_grok_headless(
         workspace,
         &prompt,
@@ -180,7 +187,9 @@ pub fn execute_task(
             model: model.map(str::to_string),
             effort: effort.map(str::to_string),
             write,
-            continue_latest: resume_last,
+            continue_latest: resume_last && resume_session_id.is_none(),
+            resume_session_id: resume_session_id.clone(),
+            capture_session: true,
             ..Default::default()
         },
     )?;
@@ -196,13 +205,16 @@ pub fn execute_task(
     } else {
         result.stderr.clone()
     };
-    let rendered = render_task_result(title, Some(&job.id), write, body);
+    let mut rendered = render_task_result(title, Some(&job.id), write, body);
+    if let Some(ref sid) = result.session_id {
+        rendered.push_str(&format!("\n\nGrok session: `{sid}`\nResume: `grok -r {sid}` or `/grok:rescue --resume`\n"));
+    }
     let summary = first_meaningful_line(
         body,
         &first_meaningful_line(&failure, &format!("{title} finished.")),
     );
 
-    finish_job(
+    finish_job_with_session(
         workspace,
         job,
         result.status,
@@ -211,10 +223,13 @@ pub fn execute_task(
             "rawOutput": result.stdout,
             "stderr": result.stderr,
             "write": write,
-            "resumeLast": resume_last
+            "resumeLast": resume_last,
+            "grokSessionId": result.session_id,
+            "resumedSessionId": resume_session_id
         }),
         &rendered,
         &summary,
+        result.session_id.clone(),
     )?;
 
     if json {

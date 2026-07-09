@@ -11,7 +11,7 @@ use crate::grok::{
     build_adversarial_prompt, build_review_prompt, ensure_grok_ready, normalize_effort,
     run_grok_review,
 };
-use crate::jobutil::{finish_job, mark_running, new_job};
+use crate::jobutil::{finish_job, finish_job_with_session, mark_running, new_job};
 use crate::render::{first_meaningful_line, json_pretty, render_review_result, shorten};
 use crate::state::upsert_job;
 use crate::worker::{
@@ -215,7 +215,12 @@ pub fn execute_review(
     let rendered = render_review_result(review_name, &target.label, body, result.status);
     let summary = first_meaningful_line(body, &format!("{review_name} completed."));
 
-    finish_job(
+    let mut rendered = rendered;
+    if let Some(ref sid) = result.session_id {
+        rendered.push_str(&format!("\n\nGrok session: `{sid}`\n"));
+    }
+
+    finish_job_with_session(
         workspace,
         job,
         result.status,
@@ -225,11 +230,13 @@ pub fn execute_review(
             "grok": {
                 "status": result.status,
                 "stdout": result.stdout,
-                "stderr": result.stderr
+                "stderr": result.stderr,
+                "sessionId": result.session_id
             }
         }),
         &rendered,
         &summary,
+        result.session_id.clone(),
     )?;
 
     if args.json {
