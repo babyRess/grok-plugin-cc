@@ -1,3 +1,9 @@
+## 0.1.3
+
+### Changed
+- Simpler install: marketplace-only (Node) or one-line curl to `~/.grok/bin`
+- `resolve-companion` finds global `~/.grok/bin/grok-companion`
+
 # Changelog
 
 ## 0.1.2
