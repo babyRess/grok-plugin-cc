@@ -1,0 +1,6 @@
+Grok plugin for Claude Code
+Copyright 2026 xAI contributors
+
+This product is inspired by the architecture of openai/codex-plugin-cc
+(Apache-2.0), but uses the Grok Build CLI as its runtime backend and is
+an independent implementation.

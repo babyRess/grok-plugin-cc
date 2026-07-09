@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "GrokReviewOutput",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["summary", "findings"],
+  "properties": {
+    "summary": {
+      "type": "string",
+      "description": "Short overall assessment of the change."
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["title", "severity", "detail"],
+        "properties": {
+          "title": { "type": "string" },
+          "severity": {
+            "type": "string",
+            "enum": ["critical", "high", "medium", "low", "info"]
+          },
+          "path": { "type": "string" },
+          "detail": { "type": "string" },
+          "suggestion": { "type": "string" }
+        }
+      }
+    },
+    "residualRisks": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  }
+}

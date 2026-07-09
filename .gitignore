@@ -1,0 +1,13 @@
+node_modules/
+.DS_Store
+*.log
+.tmp/
+.generated/
+coverage/
+/target/
+**/target/
+# Built Rust companion — build with: npm run install:rust-bin
+plugins/grok/bin/
+*.swp
+.idea/
+.vscode/

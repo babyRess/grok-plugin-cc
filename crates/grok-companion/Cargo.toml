@@ -1,0 +1,25 @@
+[package]
+name = "grok-companion"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Rust companion CLI for the Grok Claude Code plugin (setup / status / review)"
+readme = "README.md"
+
+[[bin]]
+name = "grok-companion"
+path = "src/main.rs"
+
+[dependencies]
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+clap = { version = "4", features = ["derive", "env"] }
+directories = "6"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+thiserror = "2"
+which = "7"
+
+[dev-dependencies]
+tempfile = "3"
