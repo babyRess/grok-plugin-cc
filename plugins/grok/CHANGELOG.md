@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.2
+
+### Added
+- Prebuilt binary install (no Rust required): `scripts/install-companion.sh`
+- GitHub Actions release workflow for macOS/Linux multi-arch assets
+- `npm run install:companion` downloads latest release binary
+
 ## 0.1.1
 
 ### Added

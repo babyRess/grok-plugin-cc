@@ -1,6 +1,6 @@
 {
   "name": "@xai/grok-plugin-cc",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "type": "module",
   "description": "Use Grok from Claude Code to review code or delegate tasks.",
@@ -13,6 +13,8 @@
     "companion": "node plugins/grok/scripts/grok-companion.mjs",
     "build:rust": "cargo build -p grok-companion --release",
     "test:rust": "cargo test -p grok-companion",
-    "install:rust-bin": "cargo build -p grok-companion --release && mkdir -p plugins/grok/bin && cp target/release/grok-companion plugins/grok/bin/grok-companion"
+    "install:rust-bin": "cargo build -p grok-companion --release && mkdir -p plugins/grok/bin && cp target/release/grok-companion plugins/grok/bin/grok-companion",
+    "install:companion": "bash scripts/install-companion.sh --force",
+    "install:companion:local": "npm run install:rust-bin"
   }
 }

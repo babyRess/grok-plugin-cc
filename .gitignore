@@ -7,7 +7,9 @@ coverage/
 /target/
 **/target/
 # Built Rust companion — build with: npm run install:rust-bin
+# or download: npm run install:companion
 plugins/grok/bin/
+dist/
 *.swp
 .idea/
 .vscode/
