@@ -6,8 +6,8 @@ import path from "node:path";
 import { resolveWorkspaceRoot } from "./workspace.mjs";
 
 const STATE_VERSION = 1;
-const PLUGIN_DATA_ENVS = ["CLAUDE_PLUGIN_DATA", "GROK_PLUGIN_DATA"];
 const FALLBACK_STATE_ROOT_DIR = path.join(os.tmpdir(), "grok-companion");
+const STABLE_STATE_ROOT_DIR = path.join(os.homedir(), ".grok", "companion-state");
 const STATE_FILE_NAME = "state.json";
 const JOBS_DIR_NAME = "jobs";
 const MAX_JOBS = 50;
@@ -26,13 +26,22 @@ function defaultState() {
   };
 }
 
+function looksLikeGrokPluginData(dir) {
+  return String(dir || "").toLowerCase().includes("grok");
+}
+
+/**
+ * Prefer Grok-owned state roots. Claude Code may leave CLAUDE_PLUGIN_DATA
+ * pointed at another plugin (e.g. codex-openai-codex); ignore those.
+ */
 function resolvePluginDataRoot() {
-  for (const key of PLUGIN_DATA_ENVS) {
-    if (process.env[key]) {
-      return process.env[key];
-    }
+  if (process.env.GROK_PLUGIN_DATA) {
+    return process.env.GROK_PLUGIN_DATA;
   }
-  return null;
+  if (process.env.CLAUDE_PLUGIN_DATA && looksLikeGrokPluginData(process.env.CLAUDE_PLUGIN_DATA)) {
+    return process.env.CLAUDE_PLUGIN_DATA;
+  }
+  return STABLE_STATE_ROOT_DIR;
 }
 
 export function resolveStateDir(cwd) {

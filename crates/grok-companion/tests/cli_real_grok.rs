@@ -41,7 +41,7 @@ fn run_companion(args: &[&str], cwd: &std::path::Path, plugin_data: &std::path::
         c
     };
     cmd.current_dir(cwd);
-    cmd.env("CLAUDE_PLUGIN_DATA", plugin_data);
+    cmd.env("GROK_PLUGIN_DATA", plugin_data);
     // Ensure real grok is used (clear any override)
     cmd.env_remove("GROK_BIN");
     let out = cmd.output().expect("spawn companion");

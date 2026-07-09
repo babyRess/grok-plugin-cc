@@ -101,13 +101,36 @@ impl Default for State {
     }
 }
 
+/// Whether a plugin-data path looks like it belongs to the Grok plugin.
+///
+/// Claude Code sometimes leaves `CLAUDE_PLUGIN_DATA` pointed at another plugin
+/// (e.g. `codex-openai-codex`) in the Bash environment. Writing Grok jobs there
+/// makes status/result miss the real store and confuses debugging.
+fn looks_like_grok_plugin_data(path: &Path) -> bool {
+    let s = path.to_string_lossy().to_ascii_lowercase();
+    s.contains("grok")
+}
+
 fn plugin_data_root() -> Option<PathBuf> {
-    for key in ["CLAUDE_PLUGIN_DATA", "GROK_PLUGIN_DATA"] {
-        if let Ok(v) = std::env::var(key) {
-            if !v.is_empty() {
-                return Some(PathBuf::from(v));
+    // Prefer an explicit Grok-owned root first.
+    if let Ok(v) = std::env::var("GROK_PLUGIN_DATA") {
+        if !v.is_empty() {
+            return Some(PathBuf::from(v));
+        }
+    }
+    // Accept CLAUDE_PLUGIN_DATA only when it is clearly this plugin's data dir.
+    if let Ok(v) = std::env::var("CLAUDE_PLUGIN_DATA") {
+        if !v.is_empty() {
+            let p = PathBuf::from(&v);
+            if looks_like_grok_plugin_data(&p) {
+                return Some(p);
             }
         }
+    }
+    // Stable home fallback so status/result work outside Claude plugin env.
+    if let Some(home) = directories::UserDirs::new().map(|u| u.home_dir().to_path_buf()) {
+        let stable = home.join(".grok").join("companion-state");
+        return Some(stable);
     }
     None
 }
@@ -288,10 +311,10 @@ mod tests {
         fs::create_dir_all(&git).unwrap();
         let pdata = dir.path().join("pdata");
         fs::create_dir_all(&pdata).unwrap();
-        std::env::set_var("CLAUDE_PLUGIN_DATA", &pdata);
+        std::env::set_var("GROK_PLUGIN_DATA", &pdata);
         set_config(dir.path(), Some(true)).unwrap();
         assert!(get_config(dir.path()).stop_review_gate);
-        std::env::remove_var("CLAUDE_PLUGIN_DATA");
+        std::env::remove_var("GROK_PLUGIN_DATA");
     }
 
     #[test]
@@ -301,7 +324,7 @@ mod tests {
         fs::create_dir_all(dir.path().join(".git")).unwrap();
         let pdata = dir.path().join("pdata");
         fs::create_dir_all(&pdata).unwrap();
-        std::env::set_var("CLAUDE_PLUGIN_DATA", &pdata);
+        std::env::set_var("GROK_PLUGIN_DATA", &pdata);
 
         let id = generate_job_id("task");
         upsert_job(
@@ -335,6 +358,6 @@ mod tests {
         let jobs = list_jobs(dir.path());
         assert_eq!(jobs.len(), 1);
         assert_eq!(jobs[0].id, id);
-        std::env::remove_var("CLAUDE_PLUGIN_DATA");
+        std::env::remove_var("GROK_PLUGIN_DATA");
     }
 }

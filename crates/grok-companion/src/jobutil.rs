@@ -161,8 +161,13 @@ pub fn reconcile_stale_job(workspace: &Path, job: &mut Job) -> Result<bool> {
     if let Some(log) = &job.log_file {
         summary.push_str(&format!(" Log: {log}"));
     } else {
+        // Foreground `task` never sets log_file; this usually means Claude reaped
+        // a blocking Bash/subagent while Grok was still running. Detached workers
+        // (`task --background`) write `{jobId}.log` and survive parent exit.
         summary.push_str(
-            " No worker log was captured (older companion builds discarded worker stdio).",
+            " No worker log (foreground run, or older companion without log capture). \
+If this was launched from Claude Code background/rescue, re-run with companion \
+`task --background` so a detached worker keeps running after Bash exits.",
         );
     }
     summary.push_str(" Re-run the task, or resume the Grok session if one was created.");
@@ -215,7 +220,7 @@ mod tests {
         fs::create_dir_all(dir.path().join(".git")).unwrap();
         let pdata = dir.path().join("pdata");
         fs::create_dir_all(&pdata).unwrap();
-        std::env::set_var("CLAUDE_PLUGIN_DATA", &pdata);
+        std::env::set_var("GROK_PLUGIN_DATA", &pdata);
 
         let mut job = Job {
             id: "task-dead-1".into(),
@@ -250,7 +255,7 @@ mod tests {
         assert!(job.error.as_deref().unwrap_or("").contains("no longer running"));
         assert!(job.result_file.is_some());
 
-        std::env::remove_var("CLAUDE_PLUGIN_DATA");
+        std::env::remove_var("GROK_PLUGIN_DATA");
     }
 
     #[test]
@@ -260,7 +265,7 @@ mod tests {
         fs::create_dir_all(dir.path().join(".git")).unwrap();
         let pdata = dir.path().join("pdata");
         fs::create_dir_all(&pdata).unwrap();
-        std::env::set_var("CLAUDE_PLUGIN_DATA", &pdata);
+        std::env::set_var("GROK_PLUGIN_DATA", &pdata);
 
         let mut job = Job {
             id: "task-live-1".into(),
@@ -292,6 +297,6 @@ mod tests {
         assert!(!changed);
         assert_eq!(job.status.as_deref(), Some("running"));
 
-        std::env::remove_var("CLAUDE_PLUGIN_DATA");
+        std::env::remove_var("GROK_PLUGIN_DATA");
     }
 }

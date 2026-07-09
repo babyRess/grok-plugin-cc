@@ -13,10 +13,10 @@ $ARGUMENTS
 
 Execution mode:
 
-- If the request includes `--background`, run the `grok:grok-rescue` subagent in the background.
-- If the request includes `--wait`, run the `grok:grok-rescue` subagent in the foreground.
-- If neither flag is present, default to foreground.
-- `--background` and `--wait` are execution flags for Claude Code. Do not forward them to `task`, and do not treat them as part of the natural-language task text.
+- If the request includes `--background`, run the `grok:grok-rescue` subagent in the background **and** ensure the subagent passes companion `task --background` (detached worker). Claude-side background alone is not enough — a foreground `task` inside a reaped Bash job dies with "PID … died without writing a result" and no log.
+- If the request includes `--wait`, run the `grok:grok-rescue` subagent in the foreground and call companion `task` without `--background`.
+- If neither flag is present, default to foreground for small asks; for long/open-ended rescues the subagent should still pass companion `--background`.
+- Do not treat `--background` / `--wait` as natural-language task text. `--background` must become companion `task --background` (not stripped).
 - `--model` and `--effort` are runtime-selection flags. Preserve them for the forwarded `task` call, but do not treat them as part of the natural-language task text.
 - If the request includes `--resume`, do not ask whether to continue. The user already chose.
 - If the request includes `--fresh`, do not ask whether to continue. The user already chose.

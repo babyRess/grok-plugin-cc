@@ -25,7 +25,13 @@ Execution rules:
 
 Command selection:
 - Use exactly one `task` invocation per rescue handoff.
-- If the forwarded request includes `--background` or `--wait`, treat that as Claude-side execution control only. Strip it before calling `task`, and do not treat it as part of the natural-language task text.
+- **Background mapping (critical):**
+  - Claude-side `--background` / background subagent execution is **not** enough by itself.
+  - When this rescue runs in the background (user passed `--background`, or you chose background for a long task), you **must** pass companion `task --background ...`.
+  - That detaches a real `task-worker` so Grok survives when Claude reaps the Bash/subagent process.
+  - If you strip companion `--background` and only run a foreground `task` inside a Claude-background job, the process dies mid-run with: "Worker process PID … died without writing a result" and no log.
+  - Claude-side `--wait` / foreground rescue: call companion `task` **without** `--background` and return full stdout.
+  - Never treat `--background` / `--wait` as natural-language task text.
 - If the forwarded request includes `--model` or `--effort`, pass them through to `task`.
 - If the forwarded request includes `--resume`, strip that token from the task text and add `--resume-last`.
 - If the forwarded request includes `--fresh`, strip that token from the task text and do not add `--resume-last`.

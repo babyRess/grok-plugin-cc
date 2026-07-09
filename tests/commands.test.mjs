@@ -27,15 +27,15 @@ describe("companion CLI", () => {
   beforeEach(() => {
     dir = makeTempDir();
     fs.mkdirSync(path.join(dir, ".git"), { recursive: true });
-    previousData = process.env.CLAUDE_PLUGIN_DATA;
-    process.env.CLAUDE_PLUGIN_DATA = path.join(dir, "plugin-data");
+    previousData = process.env.GROK_PLUGIN_DATA;
+    process.env.GROK_PLUGIN_DATA = path.join(dir, "plugin-data");
   });
 
   afterEach(() => {
     if (previousData === undefined) {
-      delete process.env.CLAUDE_PLUGIN_DATA;
+      delete process.env.GROK_PLUGIN_DATA;
     } else {
-      process.env.CLAUDE_PLUGIN_DATA = previousData;
+      process.env.GROK_PLUGIN_DATA = previousData;
     }
     fs.rmSync(dir, { recursive: true, force: true });
   });
@@ -49,7 +49,7 @@ describe("companion CLI", () => {
   it("runs setup --json", () => {
     const result = runCompanion(["setup", "--json"], {
       cwd: dir,
-      env: { CLAUDE_PLUGIN_DATA: path.join(dir, "plugin-data") }
+      env: { GROK_PLUGIN_DATA: path.join(dir, "plugin-data") }
     });
     assert.equal(result.status === 0 || result.status === 1, true);
     const parsed = JSON.parse(result.stdout);
@@ -61,14 +61,14 @@ describe("companion CLI", () => {
   it("toggles stop review gate", () => {
     const enable = runCompanion(["setup", "--enable-review-gate", "--json"], {
       cwd: dir,
-      env: { CLAUDE_PLUGIN_DATA: path.join(dir, "plugin-data") }
+      env: { GROK_PLUGIN_DATA: path.join(dir, "plugin-data") }
     });
     const enabled = JSON.parse(enable.stdout);
     assert.equal(enabled.config.stopReviewGate, true);
 
     const disable = runCompanion(["setup", "--disable-review-gate", "--json"], {
       cwd: dir,
-      env: { CLAUDE_PLUGIN_DATA: path.join(dir, "plugin-data") }
+      env: { GROK_PLUGIN_DATA: path.join(dir, "plugin-data") }
     });
     const disabled = JSON.parse(disable.stdout);
     assert.equal(disabled.config.stopReviewGate, false);
@@ -77,7 +77,7 @@ describe("companion CLI", () => {
   it("status with no jobs", () => {
     const result = runCompanion(["status"], {
       cwd: dir,
-      env: { CLAUDE_PLUGIN_DATA: path.join(dir, "plugin-data") }
+      env: { GROK_PLUGIN_DATA: path.join(dir, "plugin-data") }
     });
     assert.equal(result.status, 0);
     assert.match(result.stdout, /No Grok companion jobs/);
@@ -86,7 +86,7 @@ describe("companion CLI", () => {
   it("task-resume-candidate when empty", () => {
     const result = runCompanion(["task-resume-candidate", "--json"], {
       cwd: dir,
-      env: { CLAUDE_PLUGIN_DATA: path.join(dir, "plugin-data") }
+      env: { GROK_PLUGIN_DATA: path.join(dir, "plugin-data") }
     });
     assert.equal(result.status, 0);
     const parsed = JSON.parse(result.stdout);

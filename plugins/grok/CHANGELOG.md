@@ -1,3 +1,10 @@
+## 0.1.6
+
+### Fixed
+- Rescue background mapping: Claude-side `--background` must also pass companion `task --background`. Foreground `task` inside a reaped Claude Bash/subagent died with "PID … died without writing a result" and no log — that was not a broken Grok binary
+- Job state no longer trusts foreign `CLAUDE_PLUGIN_DATA` (e.g. `codex-openai-codex`); prefers `GROK_PLUGIN_DATA`, grok-looking Claude data dirs, then `~/.grok/companion-state`
+- Dead-worker status text no longer blames "older companion builds" for missing logs on foreground runs; points at companion `--background`
+
 ## 0.1.5
 
 ### Fixed

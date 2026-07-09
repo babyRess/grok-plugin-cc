@@ -165,7 +165,7 @@ mod tests {
         fs::create_dir_all(&git).unwrap();
         let pdata = dir.path().join("pdata");
         fs::create_dir_all(&pdata).unwrap();
-        std::env::set_var("CLAUDE_PLUGIN_DATA", &pdata);
+        std::env::set_var("GROK_PLUGIN_DATA", &pdata);
 
         let req = WorkerRequest::Task {
             request: TaskWorkerRequest {
@@ -190,6 +190,6 @@ mod tests {
             }
             _ => panic!("wrong type"),
         }
-        std::env::remove_var("CLAUDE_PLUGIN_DATA");
+        std::env::remove_var("GROK_PLUGIN_DATA");
     }
 }

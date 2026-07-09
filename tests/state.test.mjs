@@ -22,15 +22,15 @@ describe("state", () => {
   beforeEach(() => {
     dir = makeTempDir();
     fs.mkdirSync(path.join(dir, ".git"), { recursive: true });
-    previousData = process.env.CLAUDE_PLUGIN_DATA;
-    process.env.CLAUDE_PLUGIN_DATA = path.join(dir, "plugin-data");
+    previousData = process.env.GROK_PLUGIN_DATA;
+    process.env.GROK_PLUGIN_DATA = path.join(dir, "plugin-data");
   });
 
   afterEach(() => {
     if (previousData === undefined) {
-      delete process.env.CLAUDE_PLUGIN_DATA;
+      delete process.env.GROK_PLUGIN_DATA;
     } else {
-      process.env.CLAUDE_PLUGIN_DATA = previousData;
+      process.env.GROK_PLUGIN_DATA = previousData;
     }
     fs.rmSync(dir, { recursive: true, force: true });
   });

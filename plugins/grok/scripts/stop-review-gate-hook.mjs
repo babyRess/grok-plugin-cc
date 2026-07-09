@@ -58,9 +58,13 @@ function filterJobsForCurrentSession(jobs, input = {}) {
 }
 
 function gateStatePath(workspaceRoot) {
-  // Prefer plugin data if set; else workspace-local temp under jobs dir is awkward —
-  // store next to companion state via CLAUDE_PLUGIN_DATA if present.
-  const data = process.env.CLAUDE_PLUGIN_DATA || process.env.GROK_PLUGIN_DATA;
+  // Prefer Grok-owned plugin data; ignore foreign CLAUDE_PLUGIN_DATA (e.g. codex).
+  const data =
+    process.env.GROK_PLUGIN_DATA ||
+    (process.env.CLAUDE_PLUGIN_DATA &&
+    String(process.env.CLAUDE_PLUGIN_DATA).toLowerCase().includes("grok")
+      ? process.env.CLAUDE_PLUGIN_DATA
+      : null);
   if (data) {
     return path.join(data, GATE_MARKER_FILE);
   }
