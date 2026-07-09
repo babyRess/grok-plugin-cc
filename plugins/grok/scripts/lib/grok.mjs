@@ -139,6 +139,8 @@ export function runGrokHeadless(cwd, options) {
   /** @type {string[]} */
   // --always-approve is required headless: without it Grok can hang forever
   // waiting for interactive tool permission while stdin is closed.
+  // Do NOT also pass --yolo: it is an alias for --always-approve and clap
+  // errors with "cannot be used multiple times".
   const args = [
     "-p",
     prompt,
@@ -165,11 +167,9 @@ export function runGrokHeadless(cwd, options) {
     args.push("-c");
   }
 
-  if (options.write) {
-    // Auto-approve tools for unattended rescue work
-    args.push("--yolo");
-  } else {
-    // Read-oriented: still allow shell for git inspection, but deny file writes
+  if (!options.write) {
+    // Read-oriented: still allow shell for git inspection, but deny file writes.
+    // Write mode relies on --always-approve alone (no --yolo alias).
     args.push(
       "--disallowed-tools",
       "search_replace,Write,Edit"

@@ -1,3 +1,8 @@
+## 0.1.4
+
+### Fixed
+- Headless write/rescue no longer passes both `--always-approve` and `--yolo` (Grok CLI treats `--yolo` as an alias of `--always-approve`, which failed with "cannot be used multiple times")
+
 ## 0.1.3
 
 ### Changed

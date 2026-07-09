@@ -242,8 +242,11 @@ fn empty_or<'a>(value: &'a str, fallback: &'a str) -> &'a str {
 /// Run headless `grok -p` with optional write mode / resume.
 ///
 /// Important: non-interactive runs must auto-approve tool use. Without
-/// `--always-approve` / `--yolo`, Grok can block forever on a permission
-/// prompt while stdin is closed (looks like a hang after "Spawning…").
+/// `--always-approve`, Grok can block forever on a permission prompt while
+/// stdin is closed (looks like a hang after "Spawning…").
+///
+/// Do **not** also pass `--yolo`: in current Grok CLI it is an alias for
+/// `--always-approve`, and clap rejects the flag when used twice.
 pub fn run_grok_headless(
     cwd: &Path,
     prompt: &str,
@@ -268,6 +271,8 @@ pub fn run_grok_headless(
         "--cwd".into(),
         cwd.display().to_string(),
         // Required for headless: never wait on interactive tool approval.
+        // Write vs read-only is controlled below via tool allow/deny lists —
+        // never add `--yolo` here (alias of this flag → "cannot be used multiple times").
         "--always-approve".into(),
     ];
 
@@ -298,11 +303,9 @@ pub fn run_grok_headless(
         eprintln!("[grok] Continuing latest session in cwd (-c)");
     }
 
-    if options.write {
-        // Full auto for write-capable rescue work
-        args.push("--yolo".into());
-    } else {
-        // Read-only: block file mutation tools, but still auto-approve reads
+    if !options.write {
+        // Read-only: block file mutation tools, but still auto-approve reads.
+        // Write mode relies on --always-approve alone (no extra flag).
         args.push("--disallowed-tools".into());
         args.push("search_replace,Write,Edit".into());
         args.push("--no-subagents".into());
